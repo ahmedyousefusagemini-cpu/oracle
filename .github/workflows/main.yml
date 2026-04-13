@@ -3,7 +3,7 @@ name: Oracle ARM Retry
 on:
   workflow_dispatch:
   schedule:
-    - cron: '8 */6 * * *'
+    - cron: '20 */6.1 * * *'
 
 jobs:
   retry:
@@ -51,7 +51,6 @@ jobs:
                 --shape "VM.Standard.A1.Flex" \
                 --shape-config '{"ocpus":1,"memoryInGBs":6}' \
                 --display-name "vps" \
-                --image-id "ocid1.image.oc1.uk-london-1.aaaaaaaarlzudoyt5g2ofuqhmkak5bcosbqstkcutdpx3eva5dc7t4v5wgpq" \
                 --subnet-id "ocid1.subnet.oc1.uk-london-1.aaaaaaaa7a5ggxpnjqvwqo4c7qmaxhhvb3x7filymmnoso6vadn5sbhdiqia" \
                 --ssh-authorized-keys-file /tmp/ssh_key.pub \
                 --assign-public-ip true \
