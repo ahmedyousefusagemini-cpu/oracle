@@ -1,0 +1,60 @@
+name: "🔁 Oracle ARM Instance Retry"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: "Install OCI CLI"
+        run: |
+          pip install oci-cli
+
+      - name: "Setup OCI Config"
+        env:
+          OCI_KEY: $ secrets.OCI_API_KEY 
+        run: |
+          mkdir -p ~/.oci
+          echo "$OCI_KEY" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+          cat > ~/.oci/config << 'EOF'
+          [DEFAULT]
+          user=$ secrets.OCI_USER_OCID 
+          fingerprint=$ secrets.OCI_FINGERPRINT 
+          tenancy=$ secrets.OCI_TENANCY_OCID 
+          region=uk-london-1
+          key_file=~/.oci/oci_api_key.pem
+          EOF
+
+      - name: "Retry Instance Creation"
+        run: |
+          SSH_KEY="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC4XK1/Lx5opT+XIBKjm+5PHPLOGkYlquUk3A9F//JRzMOSJ1siVZMgEmyDdHcgdr+iKymrioTKfOI7qj/FhJJGCuWrZtC+tXAUzW3pKsnn0ft0itKcdLldPDq1sA969p1NSlg+Czp/kBiy3MswqN8O9Ev9Mds/OWtnHpIqZ2DMIRc8CQdSGfxrRG2+/mvemMZAG/LgNXeY+OmsgS3hb7D9LhnUds6clgEBhI1cIVLpwuUvR1XdxuFat+ZKOHUrLZCNg+G8KSaa0UIOZB1XKf1QRvXxB6HzFwdDSsGCazznHuXmZuXjHm7I9sF33rI7z9ZVirBNHnygB/nWtBu1X/ZP rsa-key-20260413"
+
+          while true; do
+            echo "$(date) - Attempting to create instance..."
+            
+            RESULT=$(oci compute instance launch \
+              --availability-domain "TmZB:UK-LONDON-1-AD-1" \
+              --compartment-id "ocid1.tenancy.oc1..aaaaaaaava7zhydntaf3ad2el4m4x7awm2dvf4f2pxrm7ytle6zmhqkkpteq" \
+              --shape "VM.Standard.A1.Flex" \
+              --shape-config '{"ocpus":1,"memoryInGBs":6}' \
+              --display-name "n8n-server" \
+              --image-id "ocid1.image.oc1.uk-london-1.aaaaaaaarlzudoyt5g2ofuqhmkak5bcosbqstkcutdpx3eva5dc7t4v5wgpq" \
+              --subnet-id "ocid1.subnet.oc1.uk-london-1.aaaaaaaa7a5ggxpnjqvwqo4c7qmaxhhvb3x7filymmnoso6vadn5sbhdiqia" \
+              --ssh-authorized-keys "$SSH_KEY" \
+              --assign-public-ip true \
+              2>&1)
+
+            echo "$RESULT"
+
+            if echo "$RESULT" | grep -q "PROVISIONING"; then
+              echo "✅ SUCCESS!"
+              break
+            fi
+
+            echo "❌ Retrying in 60s..."
+            sleep 60
+          done
