@@ -6,7 +6,7 @@ on:
 jobs:
   retry:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 3600
 
     steps:
       - name: "Install OCI CLI"
@@ -16,28 +16,38 @@ jobs:
       - name: "Setup OCI Config"
         env:
           OCI_KEY: $ secrets.OCI_API_KEY 
+          OCI_USER: $ secrets.OCI_USER_OCID 
+          OCI_FINGERPRINT: $ secrets.OCI_FINGERPRINT 
+          OCI_TENANCY: $ secrets.OCI_TENANCY_OCID 
         run: |
           mkdir -p ~/.oci
           echo "$OCI_KEY" > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/oci_api_key.pem
-          cat > ~/.oci/config << 'EOF'
+          cat > ~/.oci/config << EOF
           [DEFAULT]
-          user=$ secrets.OCI_USER_OCID 
-          fingerprint=$ secrets.OCI_FINGERPRINT 
-          tenancy=$ secrets.OCI_TENANCY_OCID 
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
           region=uk-london-1
           key_file=~/.oci/oci_api_key.pem
           EOF
 
-      - name: "Retry Instance Creation"
+      - name: "Retry Instance Creation (AD-1 & AD-3)"
         run: |
           SSH_KEY="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC4XK1/Lx5opT+XIBKjm+5PHPLOGkYlquUk3A9F//JRzMOSJ1siVZMgEmyDdHcgdr+iKymrioTKfOI7qj/FhJJGCuWrZtC+tXAUzW3pKsnn0ft0itKcdLldPDq1sA969p1NSlg+Czp/kBiy3MswqN8O9Ev9Mds/OWtnHpIqZ2DMIRc8CQdSGfxrRG2+/mvemMZAG/LgNXeY+OmsgS3hb7D9LhnUds6clgEBhI1cIVLpwuUvR1XdxuFat+ZKOHUrLZCNg+G8KSaa0UIOZB1XKf1QRvXxB6HzFwdDSsGCazznHuXmZuXjHm7I9sF33rI7z9ZVirBNHnygB/nWtBu1X/ZP rsa-key-20260413"
 
+          ADS=("TmZB:UK-LONDON-1-AD-1" "TmZB:UK-LONDON-1-AD-3")
+          ATTEMPT=0
+
           while true; do
-            echo "$(date) - Attempting to create instance..."
-            
+            # Alternate between AD-1 and AD-3
+            AD="${ADS[$((ATTEMPT % 2))]}"
+            ATTEMPT=$((ATTEMPT + 1))
+
+            echo "$(date) - Attempt #$ATTEMPT using $AD..."
+
             RESULT=$(oci compute instance launch \
-              --availability-domain "TmZB:UK-LONDON-1-AD-1" \
+              --availability-domain "$AD" \
               --compartment-id "ocid1.tenancy.oc1..aaaaaaaava7zhydntaf3ad2el4m4x7awm2dvf4f2pxrm7ytle6zmhqkkpteq" \
               --shape "VM.Standard.A1.Flex" \
               --shape-config '{"ocpus":1,"memoryInGBs":6}' \
@@ -51,10 +61,14 @@ jobs:
             echo "$RESULT"
 
             if echo "$RESULT" | grep -q "PROVISIONING"; then
-              echo "✅ SUCCESS!"
+              echo ""
+              echo "========================================="
+              echo "✅ SUCCESS on $AD! Instance is being created!"
+              echo "========================================="
               break
             fi
 
-            echo "❌ Retrying in 60s..."
+            echo "❌ Out of capacity on $AD. Trying other AD in 60s..."
+            echo ""
             sleep 60
           done
