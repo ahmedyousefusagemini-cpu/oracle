@@ -37,6 +37,6 @@ jobs:
                 exit 0
               fi
               echo "Out of capacity on $AD. Next in 60s..."
-              sleep 60
+              sleep 30
             done
           done
