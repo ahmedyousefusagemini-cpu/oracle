@@ -65,7 +65,8 @@ jobs:
                 echo "SUCCESS on $AD!"
                 exit 0
               fi
-              echo "Out of capacity on $AD. Next in 30s..."
-              sleep 30
+              MSG=$(echo "$RESULT" | grep -o '"message": "[^"]*"' | head -1 | cut -d'"' -f4)
+              echo "❌ #$ATTEMPT | $AD | $MSG | $(date '+%H:%M:%S UTC')"
+              #sleep 30
             done
           done
