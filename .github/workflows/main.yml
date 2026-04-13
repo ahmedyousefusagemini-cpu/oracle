@@ -10,65 +10,62 @@ jobs:
 
     steps:
       - name: "Install OCI CLI"
-        run: |
-          pip install oci-cli
+        run: pip install oci-cli
 
       - name: "Setup OCI Config"
-        env:
-          OCI_KEY: $ secrets.OCI_API_KEY 
-          OCI_USER: $ secrets.OCI_USER_OCID 
-          OCI_FINGERPRINT: $ secrets.OCI_FINGERPRINT 
-          OCI_TENANCY: $ secrets.OCI_TENANCY_OCID 
         run: |
           mkdir -p ~/.oci
-          echo "$OCI_KEY" > ~/.oci/oci_api_key.pem
+          echo "$ secrets.OCI_API_KEY " > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/oci_api_key.pem
           cat > ~/.oci/config << EOF
           [DEFAULT]
-          user=$OCI_USER
-          fingerprint=$OCI_FINGERPRINT
-          tenancy=$OCI_TENANCY
+          user=$ secrets.OCI_USER_OCID 
+          fingerprint=$ secrets.OCI_FINGERPRINT 
+          tenancy=$ secrets.OCI_TENANCY_OCID 
           region=uk-london-1
-          key_file=~/.oci/oci_api_key.pem
+          key_file=/home/runner/.oci/oci_api_key.pem
           EOF
+          chmod 600 ~/.oci/config
+          echo "Testing OCI CLI..."
+          oci iam region list --output table || echo "OCI CLI test failed!"
 
       - name: "Retry Instance Creation (AD-1 & AD-3)"
+        shell: bash --noprofile --norc {0}
         run: |
           SSH_KEY="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC4XK1/Lx5opT+XIBKjm+5PHPLOGkYlquUk3A9F//JRzMOSJ1siVZMgEmyDdHcgdr+iKymrioTKfOI7qj/FhJJGCuWrZtC+tXAUzW3pKsnn0ft0itKcdLldPDq1sA969p1NSlg+Czp/kBiy3MswqN8O9Ev9Mds/OWtnHpIqZ2DMIRc8CQdSGfxrRG2+/mvemMZAG/LgNXeY+OmsgS3hb7D9LhnUds6clgEBhI1cIVLpwuUvR1XdxuFat+ZKOHUrLZCNg+G8KSaa0UIOZB1XKf1QRvXxB6HzFwdDSsGCazznHuXmZuXjHm7I9sF33rI7z9ZVirBNHnygB/nWtBu1X/ZP rsa-key-20260413"
 
-          ADS=("TmZB:UK-LONDON-1-AD-1" "TmZB:UK-LONDON-1-AD-3")
+          AD_LIST="TmZB:UK-LONDON-1-AD-1 TmZB:UK-LONDON-1-AD-3"
           ATTEMPT=0
 
           while true; do
-            # Alternate between AD-1 and AD-3
-            AD="${ADS[$((ATTEMPT % 2))]}"
-            ATTEMPT=$((ATTEMPT + 1))
+            for AD in $AD_LIST; do
+              ATTEMPT=$((ATTEMPT + 1))
+              echo "$(date) - Attempt #$ATTEMPT using $AD..."
 
-            echo "$(date) - Attempt #$ATTEMPT using $AD..."
+              RESULT=$(oci compute instance launch \
+                --availability-domain "$AD" \
+                --compartment-id "ocid1.tenancy.oc1..aaaaaaaava7zhydntaf3ad2el4m4x7awm2dvf4f2pxrm7ytle6zmhqkkpteq" \
+                --shape "VM.Standard.A1.Flex" \
+                --shape-config '{"ocpus":1,"memoryInGBs":6}' \
+                --display-name "n8n-server" \
+                --image-id "ocid1.image.oc1.uk-london-1.aaaaaaaarlzudoyt5g2ofuqhmkak5bcosbqstkcutdpx3eva5dc7t4v5wgpq" \
+                --subnet-id "ocid1.subnet.oc1.uk-london-1.aaaaaaaa7a5ggxpnjqvwqo4c7qmaxhhvb3x7filymmnoso6vadn5sbhdiqia" \
+                --ssh-authorized-keys "$SSH_KEY" \
+                --assign-public-ip true \
+                2>&1) || true
 
-            RESULT=$(oci compute instance launch \
-              --availability-domain "$AD" \
-              --compartment-id "ocid1.tenancy.oc1..aaaaaaaava7zhydntaf3ad2el4m4x7awm2dvf4f2pxrm7ytle6zmhqkkpteq" \
-              --shape "VM.Standard.A1.Flex" \
-              --shape-config '{"ocpus":1,"memoryInGBs":6}' \
-              --display-name "n8n-server" \
-              --image-id "ocid1.image.oc1.uk-london-1.aaaaaaaarlzudoyt5g2ofuqhmkak5bcosbqstkcutdpx3eva5dc7t4v5wgpq" \
-              --subnet-id "ocid1.subnet.oc1.uk-london-1.aaaaaaaa7a5ggxpnjqvwqo4c7qmaxhhvb3x7filymmnoso6vadn5sbhdiqia" \
-              --ssh-authorized-keys "$SSH_KEY" \
-              --assign-public-ip true \
-              2>&1)
+              echo "$RESULT"
 
-            echo "$RESULT"
+              if echo "$RESULT" | grep -q "PROVISIONING"; then
+                echo ""
+                echo "========================================="
+                echo "✅ SUCCESS on $AD! Instance is being created!"
+                echo "========================================="
+                exit 0
+              fi
 
-            if echo "$RESULT" | grep -q "PROVISIONING"; then
+              echo "❌ Out of capacity on $AD. Trying next..."
               echo ""
-              echo "========================================="
-              echo "✅ SUCCESS on $AD! Instance is being created!"
-              echo "========================================="
-              break
-            fi
-
-            echo "❌ Out of capacity on $AD. Trying other AD in 60s..."
-            echo ""
-            sleep 60
+              sleep 60
+            done
           done
