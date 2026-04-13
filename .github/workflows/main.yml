@@ -24,13 +24,13 @@ jobs:
       - name: Retry Instance Creation
         run: |
           set +e
-          SSH_KEY="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC4XK1/Lx5opT+XIBKjm+5PHPLOGkYlquUk3A9F//JRzMOSJ1siVZMgEmyDdHcgdr+iKymrioTKfOI7qj/FhJJGCuWrZtC+tXAUzW3pKsnn0ft0itKcdLldPDq1sA969p1NSlg+Czp/kBiy3MswqN8O9Ev9Mds/OWtnHpIqZ2DMIRc8CQdSGfxrRG2+/mvemMZAG/LgNXeY+OmsgS3hb7D9LhnUds6clgEBhI1cIVLpwuUvR1XdxuFat+ZKOHUrLZCNg+G8KSaa0UIOZB1XKf1QRvXxB6HzFwdDSsGCazznHuXmZuXjHm7I9sF33rI7z9ZVirBNHnygB/nWtBu1X/ZP rsa-key-20260413"
+          echo "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC4XK1/Lx5opT+XIBKjm+5PHPLOGkYlquUk3A9F//JRzMOSJ1siVZMgEmyDdHcgdr+iKymrioTKfOI7qj/FhJJGCuWrZtC+tXAUzW3pKsnn0ft0itKcdLldPDq1sA969p1NSlg+Czp/kBiy3MswqN8O9Ev9Mds/OWtnHpIqZ2DMIRc8CQdSGfxrRG2+/mvemMZAG/LgNXeY+OmsgS3hb7D9LhnUds6clgEBhI1cIVLpwuUvR1XdxuFat+ZKOHUrLZCNg+G8KSaa0UIOZB1XKf1QRvXxB6HzFwdDSsGCazznHuXmZuXjHm7I9sF33rI7z9ZVirBNHnygB/nWtBu1X/ZP rsa-key-20260413" > /tmp/ssh_key.pub
           ATTEMPT=0
           while true; do
             for AD in "TmZB:UK-LONDON-1-AD-1" "TmZB:UK-LONDON-1-AD-3"; do
               ATTEMPT=$((ATTEMPT + 1))
               echo "$(date) - Attempt #$ATTEMPT using $AD..."
-              RESULT=$(oci compute instance launch --availability-domain "$AD" --compartment-id "ocid1.tenancy.oc1..aaaaaaaava7zhydntaf3ad2el4m4x7awm2dvf4f2pxrm7ytle6zmhqkkpteq" --shape "VM.Standard.A1.Flex" --shape-config '{"ocpus":1,"memoryInGBs":6}' --display-name "n8n-server" --image-id "ocid1.image.oc1.uk-london-1.aaaaaaaarlzudoyt5g2ofuqhmkak5bcosbqstkcutdpx3eva5dc7t4v5wgpq" --subnet-id "ocid1.subnet.oc1.uk-london-1.aaaaaaaa7a5ggxpnjqvwqo4c7qmaxhhvb3x7filymmnoso6vadn5sbhdiqia" --ssh-authorized-keys "$SSH_KEY" --assign-public-ip true 2>&1) || true
+              RESULT=$(oci compute instance launch --availability-domain "$AD" --compartment-id "ocid1.tenancy.oc1..aaaaaaaava7zhydntaf3ad2el4m4x7awm2dvf4f2pxrm7ytle6zmhqkkpteq" --shape "VM.Standard.A1.Flex" --shape-config '{"ocpus":1,"memoryInGBs":6}' --display-name "n8n-server" --image-id "ocid1.image.oc1.uk-london-1.aaaaaaaarlzudoyt5g2ofuqhmkak5bcosbqstkcutdpx3eva5dc7t4v5wgpq" --subnet-id "ocid1.subnet.oc1.uk-london-1.aaaaaaaa7a5ggxpnjqvwqo4c7qmaxhhvb3x7filymmnoso6vadn5sbhdiqia" --ssh-authorized-keys-file /tmp/ssh_key.pub --assign-public-ip true 2>&1) || true
               echo "$RESULT"
               if echo "$RESULT" | grep -q "PROVISIONING"; then
                 echo "SUCCESS on $AD!"
