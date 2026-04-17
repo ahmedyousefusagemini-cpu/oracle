@@ -6,65 +6,127 @@ on:
 jobs:
   retry:
     runs-on: ubuntu-latest
-    timeout-minutes: 3600
+    timeout-minutes: 3600   # max is 360; leave margin
     env:
-      OCI_CLI_USER: ${{secrets.OCI_USER_OCID}}
-      OCI_CLI_FINGERPRINT: ${{secrets.OCI_FINGERPRINT}} 
-      OCI_CLI_TENANCY: ${{secrets.OCI_TENANCY_OCID}} 
-      OCI_CLI_KEY_CONTENT: ${{secrets.OCI_API_KEY}} 
+      OCI_CLI_USER: $ secrets.OCI_USER_OCID 
+      OCI_CLI_FINGERPRINT: $ secrets.OCI_FINGERPRINT 
+      OCI_CLI_TENANCY: $ secrets.OCI_TENANCY_OCID 
+      OCI_CLI_KEY_CONTENT: $ secrets.OCI_API_KEY 
       OCI_CLI_REGION: uk-london-1
+      COMPARTMENT_ID: ocid1.tenancy.oc1..aaaaaaaava7zhydntaf3ad2el4m4x7awm2dvf4f2pxrm7ytle6zmhqkkpteq
+      SUBNET_ID: ocid1.subnet.oc1.uk-london-1.aaaaaaaa7a5ggxpnjqvwqo4c7qmaxhhvb3x7filymmnoso6vadn5sbhdiqia
+      IMAGE_ID: ocid1.image.oc1.uk-london-1.aaaaaaaarlzudoyt5g2ofuqhmkak5bcosbqstkcutdpx3eva5dc7t4v5wgpq
 
     steps:
-      - name: Install OCI CLI
-        run: pip install oci-cli
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
 
-      - name: Test OCI CLI
-        run: oci iam region list --auth api_key --output table
+      - name: Install OCI SDK
+        run: pip install --quiet oci
 
-      - name: Check if instance already exists
+      - name: Check existing instance (once)
         id: check
         run: |
-          set +e
-          EXISTING=$(oci compute instance list --compartment-id "ocid1.tenancy.oc1..aaaaaaaava7zhydntaf3ad2el4m4x7awm2dvf4f2pxrm7ytle6zmhqkkpteq" --display-name "n8n-server" --lifecycle-state RUNNING --query "data[0].id" --raw-output 2>&1) || true
-          if [ -n "$EXISTING" ] && [ "$EXISTING" != "None" ] && [ "$EXISTING" != "" ]; then
-            echo "Instance already exists: $EXISTING"
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
-            echo "No running instance found. Will attempt to create."
-            echo "skip=false" >> $GITHUB_OUTPUT
-          fi
-      
-      - name: Retry Instance Creation
+          python - <<'PY'
+          import os, oci
+          cfg = {
+              "user": os.environ["OCI_CLI_USER"],
+              "fingerprint": os.environ["OCI_CLI_FINGERPRINT"],
+              "tenancy": os.environ["OCI_CLI_TENANCY"],
+              "region": os.environ["OCI_CLI_REGION"],
+              "key_content": os.environ["OCI_CLI_KEY_CONTENT"],
+          }
+          c = oci.core.ComputeClient(cfg)
+          r = c.list_instances(os.environ["COMPARTMENT_ID"], display_name="n8n-server", lifecycle_state="RUNNING")
+          if r.data:
+              print(f"Already running: {r.data[0].id}")
+              exit(0)
+          PY
+
+      - name: Retry instance creation (parallel ADs)
         run: |
-          set +e
-          echo "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC4XK1/Lx5opT+XIBKjm+5PHPLOGkYlquUk3A9F//JRzMOSJ1siVZMgEmyDdHcgdr+iKymrioTKfOI7qj/FhJJGCuWrZtC+tXAUzW3pKsnn0ft0itKcdLldPDq1sA969p1NSlg+Czp/kBiy3MswqN8O9Ev9Mds/OWtnHpIqZ2DMIRc8CQdSGfxrRG2+/mvemMZAG/LgNXeY+OmsgS3hb7D9LhnUds6clgEBhI1cIVLpwuUvR1XdxuFat+ZKOHUrLZCNg+G8KSaa0UIOZB1XKf1QRvXxB6HzFwdDSsGCazznHuXmZuXjHm7I9sF33rI7z9ZVirBNHnygB/nWtBu1X/ZP rsa-key-20260413" > /tmp/ssh_key.pub
-          ATTEMPT=0
-          while true; do
-            for AD in "TmZB:UK-LONDON-1-AD-1" "TmZB:UK-LONDON-1-AD-3"; do
-              ATTEMPT=$((ATTEMPT + 1))
-              echo "$(date) - Attempt #$ATTEMPT using $AD..."
-              RESULT=$(oci compute instance launch \
-                --availability-domain "$AD" \
-                --compartment-id "ocid1.tenancy.oc1..aaaaaaaava7zhydntaf3ad2el4m4x7awm2dvf4f2pxrm7ytle6zmhqkkpteq" \
-                --shape "VM.Standard.A1.Flex" \
-                --shape-config '{"ocpus":1,"memoryInGBs":6}' \
-                --display-name "vps" \
-                --subnet-id "ocid1.subnet.oc1.uk-london-1.aaaaaaaa7a5ggxpnjqvwqo4c7qmaxhhvb3x7filymmnoso6vadn5sbhdiqia" \
-                --ssh-authorized-keys-file /tmp/ssh_key.pub \
-                --assign-public-ip true \
-                --is-pv-encryption-in-transit-enabled true \
-                --source-details '{"sourceType":"image","imageId":"ocid1.image.oc1.uk-london-1.aaaaaaaarlzudoyt5g2ofuqhmkak5bcosbqstkcutdpx3eva5dc7t4v5wgpq","bootVolumeSizeInGBs":100,"bootVolumeVpusPerGB":120}' \
-                --availability-config '{"recoveryAction":"RESTORE_INSTANCE"}' \
-                --agent-config '{"isManagementDisabled":false,"isMonitoringDisabled":false,"pluginsConfig":[{"name":"Vulnerability Scanning","desiredState":"DISABLED"},{"name":"OS Management Hub Agent","desiredState":"DISABLED"},{"name":"Management Agent","desiredState":"DISABLED"},{"name":"Custom Logs Monitoring","desiredState":"ENABLED"},{"name":"Compute RDMA GPU Monitoring","desiredState":"DISABLED"},{"name":"Compute Instance Monitoring","desiredState":"ENABLED"},{"name":"Compute HPC RDMA Auto-Configuration","desiredState":"DISABLED"},{"name":"Compute HPC RDMA Authentication","desiredState":"DISABLED"},{"name":"Cloud Guard Workload Protection","desiredState":"ENABLED"},{"name":"Block Volume Management","desiredState":"DISABLED"},{"name":"Bastion","desiredState":"DISABLED"}]}' \
-                --instance-options '{"areLegacyImdsEndpointsDisabled":false}' \
-                2>&1) || true
-              #echo "$RESULT"
-              if echo "$RESULT" | grep -q "PROVISIONING"; then
-                echo "SUCCESS on $AD!"
-                exit 0
-              fi
-              MSG=$(echo "$RESULT" | grep -o '"message": "[^"]*"' | head -1 | cut -d'"' -f4)
-              echo "❌ #$ATTEMPT | $AD | $MSG | $(date '+%H:%M:%S UTC')"
-              #sleep 30
-            done
-          done
+          python - <<'PY'
+          import os, time, itertools, threading, oci
+          from oci.core.models import LaunchInstanceDetails, InstanceSourceViaImageDetails, \
+              CreateVnicDetails, LaunchInstanceShapeConfigDetails, LaunchInstanceAvailabilityConfigDetails, \
+              LaunchInstanceAgentConfigDetails, InstanceAgentPluginConfigDetails, InstanceOptions
+
+          cfg = {
+              "user": os.environ["OCI_CLI_USER"],
+              "fingerprint": os.environ["OCI_CLI_FINGERPRINT"],
+              "tenancy": os.environ["OCI_CLI_TENANCY"],
+              "region": os.environ["OCI_CLI_REGION"],
+              "key_content": os.environ["OCI_CLI_KEY_CONTENT"],
+          }
+          # Shared client reuses TCP connections → huge speedup
+          client = oci.core.ComputeClient(cfg)
+          client.base_client.session.headers.update({"Connection": "keep-alive"})
+
+          SSH_KEY = "ssh-rsa AAAAB3NzaC1yc2E...your key... rsa-key-20260413"
+
+          plugins = [
+              ("Custom Logs Monitoring", "ENABLED"),
+              ("Compute Instance Monitoring", "ENABLED"),
+              ("Cloud Guard Workload Protection", "ENABLED"),
+          ]
+          # everything else defaults to DISABLED — shorter payload
+
+          def build(ad):
+              return LaunchInstanceDetails(
+                  availability_domain=ad,
+                  compartment_id=os.environ["COMPARTMENT_ID"],
+                  shape="VM.Standard.A1.Flex",
+                  shape_config=LaunchInstanceShapeConfigDetails(ocpus=1, memory_in_gbs=6),
+                  display_name="vps",
+                  create_vnic_details=CreateVnicDetails(
+                      subnet_id=os.environ["SUBNET_ID"], assign_public_ip=True
+                  ),
+                  metadata={"ssh_authorized_keys": SSH_KEY},
+                  source_details=InstanceSourceViaImageDetails(
+                      image_id=os.environ["IMAGE_ID"],
+                      boot_volume_size_in_gbs=100,
+                      boot_volume_vpus_per_gb=120,
+                  ),
+                  is_pv_encryption_in_transit_enabled=True,
+                  availability_config=LaunchInstanceAvailabilityConfigDetails(recovery_action="RESTORE_INSTANCE"),
+                  agent_config=LaunchInstanceAgentConfigDetails(
+                      is_management_disabled=False, is_monitoring_disabled=False,
+                      plugins_config=[InstanceAgentPluginConfigDetails(name=n, desired_state=s) for n, s in plugins],
+                  ),
+                  instance_options=InstanceOptions(are_legacy_imds_endpoints_disabled=False),
+              )
+
+          ADS = ["TmZB:UK-LONDON-1-AD-1", "TmZB:UK-LONDON-1-AD-3"]
+          stop = threading.Event()
+          lock = threading.Lock()
+          counter = itertools.count(1)
+
+          def worker(ad):
+              details = build(ad)
+              while not stop.is_set():
+                  n = next(counter)
+                  t0 = time.time()
+                  try:
+                      r = client.launch_instance(details)
+                      with lock:
+                          print(f"✅ SUCCESS on {ad} (attempt #{n}): {r.data.id}")
+                      stop.set()
+                      return
+                  except oci.exceptions.ServiceError as e:
+                      msg = (e.message or "").split("\n")[0][:120]
+                      with lock:
+                          print(f"❌ #{n} | {ad} | {e.status} | {msg} | {time.strftime('%H:%M:%S')} | {time.time()-t0:.1f}s")
+                      # Back off on throttle
+                      if e.status == 429 or "TooManyRequests" in (e.code or ""):
+                          time.sleep(30)
+                      elif e.status >= 500:
+                          time.sleep(10)
+                      else:
+                          time.sleep(5)   # out-of-capacity → short pace
+
+          threads = [threading.Thread(target=worker, args=(ad,), daemon=True) for ad in ADS]
+          for t in threads: t.start()
+          for t in threads: t.join()
+          PY
