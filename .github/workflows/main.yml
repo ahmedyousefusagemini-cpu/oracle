@@ -6,7 +6,7 @@ on:
 jobs:
   retry:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 3600
     env:
       OCI_CLI_USER: ${{secrets.OCI_USER_OCID}}
       OCI_CLI_FINGERPRINT: ${{secrets.OCI_FINGERPRINT}} 
