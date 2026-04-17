@@ -6,7 +6,7 @@ on:
 jobs:
   retry:
     runs-on: ubuntu-latest
-    timeout-minutes: 3600   # max is 360; leave margin
+    timeout-minutes: 3600
     env:
       OCI_CLI_USER: $ secrets.OCI_USER_OCID 
       OCI_CLI_FINGERPRINT: $ secrets.OCI_FINGERPRINT 
@@ -16,6 +16,7 @@ jobs:
       COMPARTMENT_ID: ocid1.tenancy.oc1..aaaaaaaava7zhydntaf3ad2el4m4x7awm2dvf4f2pxrm7ytle6zmhqkkpteq
       SUBNET_ID: ocid1.subnet.oc1.uk-london-1.aaaaaaaa7a5ggxpnjqvwqo4c7qmaxhhvb3x7filymmnoso6vadn5sbhdiqia
       IMAGE_ID: ocid1.image.oc1.uk-london-1.aaaaaaaarlzudoyt5g2ofuqhmkak5bcosbqstkcutdpx3eva5dc7t4v5wgpq
+      SSH_PUBLIC_KEY: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC4XK1/Lx5opT+XIBKjm+5PHPLOGkYlquUk3A9F//JRzMOSJ1siVZMgEmyDdHcgdr+iKymrioTKfOI7qj/FhJJGCuWrZtC+tXAUzW3pKsnn0ft0itKcdLldPDq1sA969p1NSlg+Czp/kBiy3MswqN8O9Ev9Mds/OWtnHpIqZ2DMIRc8CQdSGfxrRG2+/mvemMZAG/LgNXeY+OmsgS3hb7D9LhnUds6clgEBhI1cIVLpwuUvR1XdxuFat+ZKOHUrLZCNg+G8KSaa0UIOZB1XKf1QRvXxB6HzFwdDSsGCazznHuXmZuXjHm7I9sF33rI7z9ZVirBNHnygB/nWtBu1X/ZP rsa-key-20260413"
 
     steps:
       - uses: actions/setup-python@v5
@@ -25,59 +26,86 @@ jobs:
       - name: Install OCI SDK
         run: pip install --quiet oci
 
-      - name: Check existing instance (once)
+      - name: Check if instance already exists
         id: check
         run: |
           python - <<'PY'
-          import os, oci
-          cfg = {
-              "user": os.environ["OCI_CLI_USER"],
-              "fingerprint": os.environ["OCI_CLI_FINGERPRINT"],
-              "tenancy": os.environ["OCI_CLI_TENANCY"],
-              "region": os.environ["OCI_CLI_REGION"],
-              "key_content": os.environ["OCI_CLI_KEY_CONTENT"],
-          }
-          c = oci.core.ComputeClient(cfg)
-          r = c.list_instances(os.environ["COMPARTMENT_ID"], display_name="n8n-server", lifecycle_state="RUNNING")
-          if r.data:
-              print(f"Already running: {r.data[0].id}")
-              exit(0)
-          PY
-
-      - name: Retry instance creation (parallel ADs)
-        run: |
-          python - <<'PY'
-          import os, time, itertools, threading, oci
-          from oci.core.models import LaunchInstanceDetails, InstanceSourceViaImageDetails, \
-              CreateVnicDetails, LaunchInstanceShapeConfigDetails, LaunchInstanceAvailabilityConfigDetails, \
-              LaunchInstanceAgentConfigDetails, InstanceAgentPluginConfigDetails, InstanceOptions
-
-          import os, oci
+          import os, sys, oci
           from oci.signer import Signer
-          
+
           signer = Signer(
               tenancy=os.environ["OCI_CLI_TENANCY"],
               user=os.environ["OCI_CLI_USER"],
               fingerprint=os.environ["OCI_CLI_FINGERPRINT"],
               private_key_content=os.environ["OCI_CLI_KEY_CONTENT"],
           )
-          
           client = oci.core.ComputeClient(
               config={"region": os.environ["OCI_CLI_REGION"]},
               signer=signer,
           )
+          r = client.list_instances(
+              os.environ["COMPARTMENT_ID"],
+              display_name="n8n-server",
+              lifecycle_state="RUNNING",
+          )
+          if r.data:
+              print(f"Instance already running: {r.data[0].id}")
+              # Signal downstream step to skip
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("skip=true\n")
+          else:
+              print("No running instance. Will attempt to create.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("skip=false\n")
+          PY
+
+      - name: Retry instance creation (parallel ADs)
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          python - <<'PY'
+          import os, time, itertools, threading, oci
+          from oci.signer import Signer
+          from oci.core.models import (
+              LaunchInstanceDetails,
+              InstanceSourceViaImageDetails,
+              CreateVnicDetails,
+              LaunchInstanceShapeConfigDetails,
+              LaunchInstanceAvailabilityConfigDetails,
+              LaunchInstanceAgentConfigDetails,
+              InstanceAgentPluginConfigDetails,
+              InstanceOptions,
+          )
+
+          signer = Signer(
+              tenancy=os.environ["OCI_CLI_TENANCY"],
+              user=os.environ["OCI_CLI_USER"],
+              fingerprint=os.environ["OCI_CLI_FINGERPRINT"],
+              private_key_content=os.environ["OCI_CLI_KEY_CONTENT"],
+          )
+          client = oci.core.ComputeClient(
+              config={"region": os.environ["OCI_CLI_REGION"]},
+              signer=signer,
+          )
+          # Persistent TCP/TLS connection → saves ~300ms per attempt
           client.base_client.session.headers.update({"Connection": "keep-alive"})
 
-          SSH_KEY = "ssh-rsa AAAAB3NzaC1yc2E...your key... rsa-key-20260413"
+          SSH_KEY = os.environ["SSH_PUBLIC_KEY"]
 
           plugins = [
-              ("Custom Logs Monitoring", "ENABLED"),
-              ("Compute Instance Monitoring", "ENABLED"),
-              ("Cloud Guard Workload Protection", "ENABLED"),
+              InstanceAgentPluginConfigDetails(name="Custom Logs Monitoring",      desired_state="ENABLED"),
+              InstanceAgentPluginConfigDetails(name="Compute Instance Monitoring", desired_state="ENABLED"),
+              InstanceAgentPluginConfigDetails(name="Cloud Guard Workload Protection", desired_state="ENABLED"),
+              InstanceAgentPluginConfigDetails(name="Vulnerability Scanning",      desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="OS Management Hub Agent",     desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="Management Agent",            desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="Compute RDMA GPU Monitoring", desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="Compute HPC RDMA Auto-Configuration", desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="Compute HPC RDMA Authentication",     desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="Block Volume Management",     desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="Bastion",                     desired_state="DISABLED"),
           ]
-          # everything else defaults to DISABLED — shorter payload
 
-          def build(ad):
+          def build_details(ad):
               return LaunchInstanceDetails(
                   availability_domain=ad,
                   compartment_id=os.environ["COMPARTMENT_ID"],
@@ -85,7 +113,8 @@ jobs:
                   shape_config=LaunchInstanceShapeConfigDetails(ocpus=1, memory_in_gbs=6),
                   display_name="vps",
                   create_vnic_details=CreateVnicDetails(
-                      subnet_id=os.environ["SUBNET_ID"], assign_public_ip=True
+                      subnet_id=os.environ["SUBNET_ID"],
+                      assign_public_ip=True,
                   ),
                   metadata={"ssh_authorized_keys": SSH_KEY},
                   source_details=InstanceSourceViaImageDetails(
@@ -94,10 +123,13 @@ jobs:
                       boot_volume_vpus_per_gb=120,
                   ),
                   is_pv_encryption_in_transit_enabled=True,
-                  availability_config=LaunchInstanceAvailabilityConfigDetails(recovery_action="RESTORE_INSTANCE"),
+                  availability_config=LaunchInstanceAvailabilityConfigDetails(
+                      recovery_action="RESTORE_INSTANCE",
+                  ),
                   agent_config=LaunchInstanceAgentConfigDetails(
-                      is_management_disabled=False, is_monitoring_disabled=False,
-                      plugins_config=[InstanceAgentPluginConfigDetails(name=n, desired_state=s) for n, s in plugins],
+                      is_management_disabled=False,
+                      is_monitoring_disabled=False,
+                      plugins_config=plugins,
                   ),
                   instance_options=InstanceOptions(are_legacy_imds_endpoints_disabled=False),
               )
@@ -106,9 +138,10 @@ jobs:
           stop = threading.Event()
           lock = threading.Lock()
           counter = itertools.count(1)
+          success = {"ok": False, "id": None, "ad": None}
 
           def worker(ad):
-              details = build(ad)
+              details = build_details(ad)
               while not stop.is_set():
                   n = next(counter)
                   t0 = time.time()
@@ -116,21 +149,36 @@ jobs:
                       r = client.launch_instance(details)
                       with lock:
                           print(f"✅ SUCCESS on {ad} (attempt #{n}): {r.data.id}")
+                          success["ok"] = True
+                          success["id"] = r.data.id
+                          success["ad"] = ad
                       stop.set()
                       return
                   except oci.exceptions.ServiceError as e:
-                      msg = (e.message or "").split("\n")[0][:120]
+                      msg = (e.message or "").splitlines()[0][:140]
                       with lock:
-                          print(f"❌ #{n} | {ad} | {e.status} | {msg} | {time.strftime('%H:%M:%S')} | {time.time()-t0:.1f}s")
-                      # Back off on throttle
+                          print(f"❌ #{n} | {ad} | {e.status} {e.code} | {msg} | {time.strftime('%H:%M:%S')} | {time.time()-t0:.1f}s")
                       if e.status == 429 or "TooManyRequests" in (e.code or ""):
-                          time.sleep(30)
-                      elif e.status >= 500:
-                          time.sleep(10)
+                          time.sleep(30)          # throttled — back off hard
+                      elif e.status and e.status >= 500:
+                          time.sleep(10)          # Oracle hiccup
+                      elif "LimitExceeded" in (e.code or ""):
+                          # Quota exhausted permanently — stop
+                          with lock:
+                              print(f"🛑 Quota limit reached on {ad}: {e.code}")
+                          stop.set()
+                          return
                       else:
-                          time.sleep(5)   # out-of-capacity → short pace
+                          time.sleep(5)           # out-of-capacity — gentle pace
+                  except Exception as ex:
+                      with lock:
+                          print(f"⚠️  #{n} | {ad} | unexpected: {ex}")
+                      time.sleep(15)
 
           threads = [threading.Thread(target=worker, args=(ad,), daemon=True) for ad in ADS]
           for t in threads: t.start()
           for t in threads: t.join()
+
+          if not success["ok"]:
+              raise SystemExit("No instance was created before stop condition.")
           PY
