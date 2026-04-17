@@ -52,15 +52,20 @@ jobs:
               CreateVnicDetails, LaunchInstanceShapeConfigDetails, LaunchInstanceAvailabilityConfigDetails, \
               LaunchInstanceAgentConfigDetails, InstanceAgentPluginConfigDetails, InstanceOptions
 
-          cfg = {
-              "user": os.environ["OCI_CLI_USER"],
-              "fingerprint": os.environ["OCI_CLI_FINGERPRINT"],
-              "tenancy": os.environ["OCI_CLI_TENANCY"],
-              "region": os.environ["OCI_CLI_REGION"],
-              "key_content": os.environ["OCI_CLI_KEY_CONTENT"],
-          }
-          # Shared client reuses TCP connections → huge speedup
-          client = oci.core.ComputeClient(cfg)
+          import os, oci
+          from oci.signer import Signer
+          
+          signer = Signer(
+              tenancy=os.environ["OCI_CLI_TENANCY"],
+              user=os.environ["OCI_CLI_USER"],
+              fingerprint=os.environ["OCI_CLI_FINGERPRINT"],
+              private_key_content=os.environ["OCI_CLI_KEY_CONTENT"],
+          )
+          
+          client = oci.core.ComputeClient(
+              config={"region": os.environ["OCI_CLI_REGION"]},
+              signer=signer,
+          )
           client.base_client.session.headers.update({"Connection": "keep-alive"})
 
           SSH_KEY = "ssh-rsa AAAAB3NzaC1yc2E...your key... rsa-key-20260413"
