@@ -2,8 +2,6 @@ name: Oracle ARM Retry
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '24 */6 * * *'
 
 jobs:
   retry:
