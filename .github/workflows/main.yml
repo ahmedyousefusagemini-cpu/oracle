@@ -37,6 +37,7 @@ jobs:
               tenancy=os.environ["OCI_CLI_TENANCY"],
               user=os.environ["OCI_CLI_USER"],
               fingerprint=os.environ["OCI_CLI_FINGERPRINT"],
+              private_key_file_location=None,
               private_key_content=os.environ["OCI_CLI_KEY_CONTENT"],
           )
           client = oci.core.ComputeClient(
@@ -80,6 +81,7 @@ jobs:
               tenancy=os.environ["OCI_CLI_TENANCY"],
               user=os.environ["OCI_CLI_USER"],
               fingerprint=os.environ["OCI_CLI_FINGERPRINT"],
+              private_key_file_location=None,
               private_key_content=os.environ["OCI_CLI_KEY_CONTENT"],
           )
           client = oci.core.ComputeClient(
