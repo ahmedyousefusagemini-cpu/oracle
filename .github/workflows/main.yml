@@ -6,12 +6,12 @@ on:
 jobs:
   retry:
     runs-on: ubuntu-latest
-    timeout-minutes: 3600
+    timeout-minutes: 350
     env:
-      OCI_CLI_USER: ${{secrets.OCI_USER_OCID}} 
-      OCI_CLI_FINGERPRINT: ${{secrets.OCI_FINGERPRINT}} 
-      OCI_CLI_TENANCY: ${{secrets.OCI_TENANCY_OCID}} 
-      OCI_CLI_KEY_CONTENT: ${{secrets.OCI_API_KEY}} 
+      OCI_CLI_USER: $78
+      OCI_CLI_FINGERPRINT: $79
+      OCI_CLI_TENANCY: $80
+      OCI_CLI_KEY_CONTENT: $81
       OCI_CLI_REGION: uk-london-1
       COMPARTMENT_ID: ocid1.tenancy.oc1..aaaaaaaava7zhydntaf3ad2el4m4x7awm2dvf4f2pxrm7ytle6zmhqkkpteq
       SUBNET_ID: ocid1.subnet.oc1.uk-london-1.aaaaaaaa7a5ggxpnjqvwqo4c7qmaxhhvb3x7filymmnoso6vadn5sbhdiqia
@@ -26,39 +26,52 @@ jobs:
       - name: Install OCI SDK
         run: pip install --quiet oci
 
+      - name: Diagnose secret formats
+        run: |
+          python - <<'PY'
+          import os, re
+          T = os.environ["OCI_CLI_TENANCY"]
+          U = os.environ["OCI_CLI_USER"]
+          F = os.environ["OCI_CLI_FINGERPRINT"]
+          K = os.environ["OCI_CLI_KEY_CONTENT"]
+          ok_t = bool(re.match(r"^ocid1\.tenancy\.oc[0-9]+\..+$", T))
+          ok_u = bool(re.match(r"^ocid1\.user\.oc[0-9]+\..+$", U))
+          ok_f = bool(re.match(r"^([0-9a-f]{2}:){15}[0-9a-f]{2}$", F))
+          ok_k = ("BEGIN" in K) and ("END" in K)
+          print(f"tenancy     ok={ok_t} len={len(T)}")
+          print(f"user        ok={ok_u} len={len(U)}")
+          print(f"fingerprint ok={ok_f} len={len(F)}")
+          print(f"key         ok={ok_k} len={len(K)} lines={K.count(chr(10))}")
+          if not all([ok_t, ok_u, ok_f, ok_k]):
+              raise SystemExit("One or more secrets have wrong format. Re-enter in GitHub → Settings → Secrets.")
+          PY
+
       - name: Check if instance already exists
         id: check
         run: |
           python - <<'PY'
-          import os, sys, oci
-          import oci.config
-          oci.config.validate_config = lambda *a, **k: None   # ← bypass broken validator
-          from oci.signer import Signer
+          import os, oci
 
-          signer = Signer(
-              tenancy=os.environ["OCI_CLI_TENANCY"],
-              user=os.environ["OCI_CLI_USER"],
-              fingerprint=os.environ["OCI_CLI_FINGERPRINT"],
-              private_key_file_location=None,
-              private_key_content=os.environ["OCI_CLI_KEY_CONTENT"],
-          )
-          client = oci.core.ComputeClient(
-              config={"region": os.environ["OCI_CLI_REGION"]},
-              signer=signer,
-          )
+          cfg = {
+              "user":        os.environ["OCI_CLI_USER"],
+              "fingerprint": os.environ["OCI_CLI_FINGERPRINT"],
+              "tenancy":     os.environ["OCI_CLI_TENANCY"],
+              "region":      os.environ["OCI_CLI_REGION"],
+              "key_content": os.environ["OCI_CLI_KEY_CONTENT"],
+          }
+          client = oci.core.ComputeClient(cfg)
+
           r = client.list_instances(
               os.environ["COMPARTMENT_ID"],
               display_name="n8n-server",
               lifecycle_state="RUNNING",
           )
-          if r.data:
-              print(f"Instance already running: {r.data[0].id}")
-              # Signal downstream step to skip
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              if r.data:
+                  print(f"Instance already running: {r.data[0].id}")
                   f.write("skip=true\n")
-          else:
-              print("No running instance. Will attempt to create.")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              else:
+                  print("No running instance. Will attempt to create.")
                   f.write("skip=false\n")
           PY
 
@@ -67,9 +80,6 @@ jobs:
         run: |
           python - <<'PY'
           import os, time, itertools, threading, oci
-          import oci.config
-          oci.config.validate_config = lambda *a, **k: None   # ← bypass broken validator
-          from oci.signer import Signer
           from oci.core.models import (
               LaunchInstanceDetails,
               InstanceSourceViaImageDetails,
@@ -81,34 +91,30 @@ jobs:
               InstanceOptions,
           )
 
-          signer = Signer(
-              tenancy=os.environ["OCI_CLI_TENANCY"],
-              user=os.environ["OCI_CLI_USER"],
-              fingerprint=os.environ["OCI_CLI_FINGERPRINT"],
-              private_key_file_location=None,
-              private_key_content=os.environ["OCI_CLI_KEY_CONTENT"],
-          )
-          client = oci.core.ComputeClient(
-              config={"region": os.environ["OCI_CLI_REGION"]},
-              signer=signer,
-          )
-          # Persistent TCP/TLS connection → saves ~300ms per attempt
+          cfg = {
+              "user":        os.environ["OCI_CLI_USER"],
+              "fingerprint": os.environ["OCI_CLI_FINGERPRINT"],
+              "tenancy":     os.environ["OCI_CLI_TENANCY"],
+              "region":      os.environ["OCI_CLI_REGION"],
+              "key_content": os.environ["OCI_CLI_KEY_CONTENT"],
+          }
+          client = oci.core.ComputeClient(cfg)
           client.base_client.session.headers.update({"Connection": "keep-alive"})
 
           SSH_KEY = os.environ["SSH_PUBLIC_KEY"]
 
           plugins = [
-              InstanceAgentPluginConfigDetails(name="Custom Logs Monitoring",      desired_state="ENABLED"),
-              InstanceAgentPluginConfigDetails(name="Compute Instance Monitoring", desired_state="ENABLED"),
-              InstanceAgentPluginConfigDetails(name="Cloud Guard Workload Protection", desired_state="ENABLED"),
-              InstanceAgentPluginConfigDetails(name="Vulnerability Scanning",      desired_state="DISABLED"),
-              InstanceAgentPluginConfigDetails(name="OS Management Hub Agent",     desired_state="DISABLED"),
-              InstanceAgentPluginConfigDetails(name="Management Agent",            desired_state="DISABLED"),
-              InstanceAgentPluginConfigDetails(name="Compute RDMA GPU Monitoring", desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="Custom Logs Monitoring",              desired_state="ENABLED"),
+              InstanceAgentPluginConfigDetails(name="Compute Instance Monitoring",         desired_state="ENABLED"),
+              InstanceAgentPluginConfigDetails(name="Cloud Guard Workload Protection",     desired_state="ENABLED"),
+              InstanceAgentPluginConfigDetails(name="Vulnerability Scanning",              desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="OS Management Hub Agent",             desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="Management Agent",                    desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="Compute RDMA GPU Monitoring",         desired_state="DISABLED"),
               InstanceAgentPluginConfigDetails(name="Compute HPC RDMA Auto-Configuration", desired_state="DISABLED"),
               InstanceAgentPluginConfigDetails(name="Compute HPC RDMA Authentication",     desired_state="DISABLED"),
-              InstanceAgentPluginConfigDetails(name="Block Volume Management",     desired_state="DISABLED"),
-              InstanceAgentPluginConfigDetails(name="Bastion",                     desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="Block Volume Management",             desired_state="DISABLED"),
+              InstanceAgentPluginConfigDetails(name="Bastion",                             desired_state="DISABLED"),
           ]
 
           def build_details(ad):
@@ -144,7 +150,7 @@ jobs:
           stop = threading.Event()
           lock = threading.Lock()
           counter = itertools.count(1)
-          success = {"ok": False, "id": None, "ad": None}
+          success = {"ok": False}
 
           def worker(ad):
               details = build_details(ad)
@@ -155,9 +161,7 @@ jobs:
                       r = client.launch_instance(details)
                       with lock:
                           print(f"✅ SUCCESS on {ad} (attempt #{n}): {r.data.id}")
-                          success["ok"] = True
-                          success["id"] = r.data.id
-                          success["ad"] = ad
+                      success["ok"] = True
                       stop.set()
                       return
                   except oci.exceptions.ServiceError as e:
@@ -165,17 +169,16 @@ jobs:
                       with lock:
                           print(f"❌ #{n} | {ad} | {e.status} {e.code} | {msg} | {time.strftime('%H:%M:%S')} | {time.time()-t0:.1f}s")
                       if e.status == 429 or "TooManyRequests" in (e.code or ""):
-                          time.sleep(30)          # throttled — back off hard
+                          time.sleep(30)
                       elif e.status and e.status >= 500:
-                          time.sleep(10)          # Oracle hiccup
+                          time.sleep(10)
                       elif "LimitExceeded" in (e.code or ""):
-                          # Quota exhausted permanently — stop
                           with lock:
-                              print(f"🛑 Quota limit reached on {ad}: {e.code}")
+                              print(f"🛑 Quota limit on {ad}: {e.code}")
                           stop.set()
                           return
                       else:
-                          time.sleep(5)           # out-of-capacity — gentle pace
+                          time.sleep(5)
                   except Exception as ex:
                       with lock:
                           print(f"⚠️  #{n} | {ad} | unexpected: {ex}")
@@ -186,5 +189,5 @@ jobs:
           for t in threads: t.join()
 
           if not success["ok"]:
-              raise SystemExit("No instance was created before stop condition.")
+              raise SystemExit("No instance was created.")
           PY
